@@ -223,22 +223,6 @@ $processDuration = Measure-Command {
         Write-Host "An error occurred during the restoration process: $($_.Exception.Message)" -ForegroundColor Red
         exit
     }
-
-    # Step 4: Update baseline script with actual paths
-    Write-Host "Updating baseline script with logical paths..."
-    $baselineFilePath = Join-Path $projectDir "scripts\temp\baselineTemplate.sql"
-    $updatedBaselinePath = Join-Path $projectDir "migrations\B001__Baseline.sql"
-
-    if (Test-Path $baselineFilePath) {
-        Get-Content $baselineFilePath | ForEach-Object {
-            $_ -replace "TEMPORARYBACKUP", $backupFileName `
-            -replace "TEMPORARYDATAFILENAME", $logicalDataFileName `
-            -replace "TEMPORARYLOGFILENAME", $logicalLogFileName
-        } | Set-Content $updatedBaselinePath
-        Write-Host "Baseline script updated successfully."
-    } else {
-        Write-Host "Baseline template file not found: $baselineFilePath" -ForegroundColor Red
-    }
 }
 
 # Calculate minutes and seconds separately and round to appropriate values

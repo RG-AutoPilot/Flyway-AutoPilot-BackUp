@@ -10,7 +10,14 @@ displayName = "Development database"
 [environments.shadow]
 url = "jdbc:sqlserver://localhost;databaseName=AutoPilotShadow;encrypt=true;integratedSecurity=true;trustServerCertificate=true"
 displayName = "Shadow database"
-provisioner = "clean"
+provisioner = "backup"
+
+[environments.shadow.resolvers.backup]
+backupVersion = "001"
+backupFilePath = "C:\\git\\AutoPilot\\backups\\AutoBackup_AdventureWorks2016.bak"
+
+  [environments.shadow.resolvers.backup.sqlserver]
+  generateWithMove = true
 
 [environments.Prod]
 url = "jdbc:sqlserver://localhost;databaseName=AutoPilotProd;encrypt=true;integratedSecurity=true;trustServerCertificate=true"
@@ -23,11 +30,26 @@ displayName = "Test database"
 [environments.Check]
 url = "jdbc:sqlserver://localhost;databaseName=AutoPilotCheck;encrypt=true;integratedSecurity=true;trustServerCertificate=true"
 displayName = "Check (Reporting) database"
-provisioner = "clean"
+provisioner = "backup"
+
+[environments.Check.resolvers.backup]
+backupFilePath = "C:\\git\\AutoPilot\\backups\\AutoBackup_AdventureWorks2016.bak"
+backupVersion = "001"
+
+  [environments.Check.resolvers.backup.sqlserver]
+  generateWithMove = true
 
 [environments.Build]
 url = "jdbc:sqlserver://localhost;databaseName=AutoPilotBuild;encrypt=true;integratedSecurity=true;trustServerCertificate=true"
 displayName = "Build database"
+provisioner = "backup"
+
+[environments.Build.resolvers.backup]
+backupFilePath = "C:\\git\\AutoPilot\\backups\\AutoBackup_AdventureWorks2016.bak"
+backupVersion = "001"
+
+  [environments.Build.resolvers.backup.sqlserver]
+  generateWithMove = true
 
 [flyway]
 locations = [ "filesystem:migrations" ]
@@ -37,16 +59,20 @@ validateMigrationNaming = true
 defaultSchema = "dbo"
 baselineOnMigrate = true
 baselineVersion = "001"
-sqlserver.clean.mode = "all"
-sqlserver.clean.schemas.exclude = ["ExampleSchema1", "ExampleSchema2"] 
+
+[flyway.sqlserver.clean]
+mode = "all"
+
+  [flyway.sqlserver.clean.schemas]
+  exclude = [ "ExampleSchema1", "ExampleSchema2" ]
 
 [flywayDesktop]
 developmentEnvironment = "development"
 shadowEnvironment = "shadow"
 schemaModel = "./schema-model"
 
-[flywayDesktop.generate]
-undoScripts = true
+  [flywayDesktop.generate]
+  undoScripts = true
 
 [redgateCompare.sqlserver]
 filterFile = "Filter.scpf"
