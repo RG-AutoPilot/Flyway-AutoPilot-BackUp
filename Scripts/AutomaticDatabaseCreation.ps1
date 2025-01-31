@@ -14,14 +14,27 @@ function Get-ValidatedInput {
         [ValidateScript({$_ -ne ''})] # Ensure input is not empty
         [string]$ErrorMessage
     )
+
     do {
+        # Set the prompt message color to yellow
+        $oldColor = $Host.UI.RawUI.ForegroundColor
+        $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Yellow
+
+        # Prompt the user and capture the input
         $inputValue = Read-Host $PromptMessage
+
+        # Restore original color
+        $Host.UI.RawUI.ForegroundColor = $oldColor
+
+        # If input is empty or whitespace, show the error message in red
         if ([string]::IsNullOrWhiteSpace($inputValue)) {
             Write-Host $ErrorMessage -ForegroundColor Red
         }
     } until (![string]::IsNullOrWhiteSpace($inputValue))
+
     return $inputValue
 }
+
 
 Write-Host "Flyway AutoPilot Backup & Running Setup - To get up and running, it's necessary to create a Schema Only backup of a chosen database. This will then be used to create your AutoPilot project databases."
 Write-Host "Step 1: Provide the connection details for your preferred PoC database"
@@ -31,14 +44,29 @@ Write-Host "Tip - Restore your preferred database into a non-production SQL Serv
 $sourceDB = Get-ValidatedInput -PromptMessage "Enter the Source Database Name to be Schema Backed Up (e.g., MyDatabaseName)" `
     -ErrorMessage "Database name cannot be empty. Please provide a valid database name."
 
-$projectDir = Get-ValidatedInput -PromptMessage "Enter the AutoPilot Root Project path (e.g., C:\WorkingFolders\FWD\AutoPilot)" `
-    -ErrorMessage "Project path cannot be empty. Please provide a valid directory."
+# Detect AutoPilot root directory based on the script's current location
+if ($PSScriptRoot) {
+    $defaultProjectDir = Split-Path -Path $PSScriptRoot -Parent
+    Write-Host "Detected AutoPilot Root Project path: $defaultProjectDir" -ForegroundColor Green
+} else {
+    Write-Host "Script root path could not be detected. Please provide the AutoPilot Root Project path."
+    $defaultProjectDir = $null
+}
+
+$projectDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new path"
+
+# Use detected path if user doesn't provide a new one
+if ([string]::IsNullOrWhiteSpace($projectDir)) {
+    $projectDir = $defaultProjectDir
+}
 
 # Validate project directory exists
 if (!(Test-Path -Path $projectDir)) {
     Write-Host "The specified project directory does not exist. Please check the path." -ForegroundColor Red
     exit
 }
+
+Write-Host "Project directory confirmed: $projectDir"
 
 $backupDir = Join-Path $projectDir "backups"
 
@@ -75,137 +103,152 @@ if ($trustCert -eq 'Y' -and $encryptConnection -eq 'Y') {
     $SqlConnection = Connect-DbaInstance -SqlInstance $serverName
 }
 
-# Step 1: Create the schema backup
-Write-Host "Creating a schema backup for $sourceDB..."
-$sqlCreateBackup = @"
-DECLARE @SourceDB NVARCHAR(128) = N'$sourceDB';
-DECLARE @BackupDB NVARCHAR(128) = @SourceDB + N'_Schema';
-DECLARE @BackupPath NVARCHAR(256) = N'$backupPath';
+# Start timing the entire process
+$processDuration = Measure-Command {
 
-DBCC CLONEDATABASE (@SourceDB, @BackupDB) WITH NO_STATISTICS, NO_QUERYSTORE, VERIFY_CLONEDB;
+    # Step 1: Create the schema backup
+    Write-Host "Creating a schema backup for $sourceDB..."
+    $sqlCreateBackup = @"
+    DECLARE @SourceDB NVARCHAR(128) = N'$sourceDB';
+    DECLARE @BackupDB NVARCHAR(128) = @SourceDB + N'_Schema';
+    DECLARE @BackupPath NVARCHAR(256) = N'$backupPath';
 
-DECLARE @BackupCommand NVARCHAR(MAX) = 
-N'BACKUP DATABASE [' + @BackupDB + N'] TO DISK = ''' + @BackupPath + N''' WITH INIT, FORMAT, MEDIANAME = ''SQLServerBackups'', NAME = ''Full Backup of ' + @BackupDB + N''';';
+    DBCC CLONEDATABASE (@SourceDB, @BackupDB) WITH NO_STATISTICS, NO_QUERYSTORE, VERIFY_CLONEDB;
 
-EXEC sp_executesql @BackupCommand;
+    DECLARE @BackupCommand NVARCHAR(MAX) = 
+    N'BACKUP DATABASE [' + @BackupDB + N'] TO DISK = ''' + @BackupPath + N''' WITH INIT, FORMAT, MEDIANAME = ''SQLServerBackups'', NAME = ''Full Backup of ' + @BackupDB + N''';';
 
--- Drop the temporary schema database
-IF DB_ID(@BackupDB) IS NOT NULL
-    EXEC('DROP DATABASE ' + @BackupDB);
+    EXEC sp_executesql @BackupCommand;
+
+    -- Drop the temporary schema database
+    IF DB_ID(@BackupDB) IS NOT NULL
+        EXEC('DROP DATABASE ' + @BackupDB);
 "@
 
-Invoke-DbaQuery -Query $sqlCreateBackup -SqlInstance $SqlConnection
+    Invoke-DbaQuery -Query $sqlCreateBackup -SqlInstance $SqlConnection
 
-# Step 2: Retrieve logical file names from the source database
-Write-Host "Retrieving logical file names from $sourceDB..."
-$sqlFindPaths = @"
-USE $sourceDB;
+    # Step 2: Retrieve logical file names from the source database
+    Write-Host "Retrieving logical file names from $sourceDB..."
+    $sqlFindPaths = @"
+    USE $sourceDB;
 
-SELECT name AS LogicalFileName, type_desc
-FROM sys.database_files;
+    SELECT name AS LogicalFileName, type_desc
+    FROM sys.database_files;
 "@
 
-$paths = Invoke-DbaQuery -Query $sqlFindPaths -SqlInstance $SqlConnection
-$logicalDataFileName = $paths | Where-Object { $_.type_desc -eq 'ROWS' } | Select-Object -ExpandProperty LogicalFileName
-$logicalLogFileName = $paths | Where-Object { $_.type_desc -eq 'LOG' } | Select-Object -ExpandProperty LogicalFileName
+    $paths = Invoke-DbaQuery -Query $sqlFindPaths -SqlInstance $SqlConnection
+    $logicalDataFileName = $paths | Where-Object { $_.type_desc -eq 'ROWS' } | Select-Object -ExpandProperty LogicalFileName
+    $logicalLogFileName = $paths | Where-Object { $_.type_desc -eq 'LOG' } | Select-Object -ExpandProperty LogicalFileName
 
-Write-Host "Logical Data File Name: $logicalDataFileName"
-Write-Host "Logical Log File Name: $logicalLogFileName"
+    Write-Host "Logical Data File Name: $logicalDataFileName"
+    Write-Host "Logical Log File Name: $logicalLogFileName"
 
-# Step 3: Restore the backup to multiple environments
-Write-Host "Creating AutoPilot databases using provided backup..."
-$sqlRestore = @"
-DECLARE @BackupFilePath NVARCHAR(128) = N'$backupPath';  -- Step 1. Change me to the backup location!
-DECLARE @LogicalDataFileName NVARCHAR(128) = N'$logicalDataFileName';  -- Logical Data File Name
-DECLARE @LogicalLogFileName NVARCHAR(128) = N'$logicalLogFileName';  -- Logical Log File Name
-DECLARE @DataFilePath NVARCHAR(260);  -- Data file path
-DECLARE @LogFilePath NVARCHAR(260);  -- Log file path
-DECLARE @DatabaseName NVARCHAR(128);  -- Current database name
+    # Step 3: Restore the backup to multiple environments
+    Write-Host "Creating AutoPilot databases using provided backup..."
+    $sqlRestore = @"
+    DECLARE @BackupFilePath NVARCHAR(128) = N'$backupPath'; 
+    DECLARE @LogicalDataFileName NVARCHAR(128) = N'$logicalDataFileName'; 
+    DECLARE @LogicalLogFileName NVARCHAR(128) = N'$logicalLogFileName'; 
+    DECLARE @DataFilePath NVARCHAR(260);  
+    DECLARE @LogFilePath NVARCHAR(260);  
+    DECLARE @DatabaseName NVARCHAR(128);  
 
--- Attempts to Auto Find the Paths to the logical files!
-DECLARE @mdfLocation NVARCHAR(256) = CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS NVARCHAR(200));
-DECLARE @ldfLocation NVARCHAR(256) = CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS NVARCHAR(200));
+    DECLARE @mdfLocation NVARCHAR(256) = CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS NVARCHAR(200));
+    DECLARE @ldfLocation NVARCHAR(256) = CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS NVARCHAR(200));
 
-DECLARE @mySQL NVARCHAR(MAX);
+    DECLARE @mySQL NVARCHAR(MAX);
 
-DECLARE @DatabaseList TABLE (DatabaseName NVARCHAR(128)); -- Table of databases to restore
-INSERT INTO @DatabaseList (DatabaseName)
-VALUES ('AutoPilotDev'), ('AutoPilotTest'), ('AutoPilotProd'), ('AutoPilotShadow'), ('AutoPilotBuild'), ('AutoPilotCheck');
+    DECLARE @DatabaseList TABLE (DatabaseName NVARCHAR(128)); 
+    INSERT INTO @DatabaseList (DatabaseName)
+    VALUES ('AutoPilotDev'), ('AutoPilotTest'), ('AutoPilotProd'), ('AutoPilotShadow'), ('AutoPilotBuild'), ('AutoPilotCheck');
 
-DECLARE @Counter INT = 1;
-DECLARE @TotalCount INT = (SELECT COUNT(*) FROM @DatabaseList);
+    DECLARE @Counter INT = 1;
+    DECLARE @TotalCount INT = (SELECT COUNT(*) FROM @DatabaseList);
 
-WHILE @Counter <= @TotalCount
-BEGIN
-    SET @DatabaseName = (SELECT DatabaseName FROM (
-        SELECT ROW_NUMBER() OVER (ORDER BY DatabaseName) AS RowNum, DatabaseName 
-        FROM @DatabaseList
-    ) AS TempDB
-    WHERE TempDB.RowNum = @Counter);
-
-    SET @DataFilePath = @mdfLocation + @DatabaseName + '_Data.mdf';
-    SET @LogFilePath = @ldfLocation + @DatabaseName + '_Log.ldf';
-
-    -- Use master database
-    USE [master];
-
-    IF EXISTS (SELECT name FROM sys.databases WHERE name = @DatabaseName)
+    WHILE @Counter <= @TotalCount
     BEGIN
+        SET @DatabaseName = (SELECT DatabaseName FROM (
+            SELECT ROW_NUMBER() OVER (ORDER BY DatabaseName) AS RowNum, DatabaseName 
+            FROM @DatabaseList
+        ) AS TempDB
+        WHERE TempDB.RowNum = @Counter);
+
+        SET @DataFilePath = @mdfLocation + @DatabaseName + '_Data.mdf';
+        SET @LogFilePath = @ldfLocation + @DatabaseName + '_Log.ldf';
+
+        USE [master];
+
+        IF EXISTS (SELECT name FROM sys.databases WHERE name = @DatabaseName)
+        BEGIN
+            BEGIN TRY
+                SET @mySQL = N'ALTER DATABASE [' + @DatabaseName + '] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;';
+                EXEC sp_executesql @mySQL;
+                SET @mySQL = N'DROP DATABASE [' + @DatabaseName + '];';
+                EXEC sp_executesql @mySQL;
+            END TRY
+            BEGIN CATCH
+                PRINT 'Error occurred while altering or dropping the existing database ' + @DatabaseName;
+                PRINT ERROR_MESSAGE();
+                RETURN;
+            END CATCH
+        END
+
         BEGIN TRY
-            SET @mySQL = N'ALTER DATABASE [' + @DatabaseName + '] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;';
+            SET @mySQL = N'RESTORE DATABASE [' + @DatabaseName + ']
+            FROM DISK = ''' + @BackupFilePath + '''
+            WITH REPLACE,
+            MOVE ''' + @LogicalDataFileName + ''' TO ''' + @DataFilePath + ''',
+            MOVE ''' + @LogicalLogFileName + ''' TO ''' + @LogFilePath + ''';';
             EXEC sp_executesql @mySQL;
-            SET @mySQL = N'DROP DATABASE [' + @DatabaseName + '];';
+
+            SET @mySQL = N'ALTER DATABASE [' + @DatabaseName + '] SET MULTI_USER;';
+            EXEC sp_executesql @mySQL;
+            SET @mySQL = N'ALTER DATABASE [' + @DatabaseName + '] SET READ_WRITE;';
             EXEC sp_executesql @mySQL;
         END TRY
         BEGIN CATCH
-            PRINT 'Error occurred while altering or dropping the existing database ' + @DatabaseName;
+            PRINT 'Error occurred during the restore operation for database ' + @DatabaseName;
             PRINT ERROR_MESSAGE();
             RETURN;
         END CATCH
+
+        SET @Counter = @Counter + 1;
     END
-
-    BEGIN TRY
-        SET @mySQL = N'RESTORE DATABASE [' + @DatabaseName + ']
-        FROM DISK = ''' + @BackupFilePath + '''
-        WITH REPLACE,
-        MOVE ''' + @LogicalDataFileName + ''' TO ''' + @DataFilePath + ''',
-        MOVE ''' + @LogicalLogFileName + ''' TO ''' + @LogFilePath + ''';';
-        EXEC sp_executesql @mySQL;
-
-        -- Set database to READ_WRITE mode and MULTI_USER
-        SET @mySQL = N'ALTER DATABASE [' + @DatabaseName + '] SET MULTI_USER;';
-        EXEC sp_executesql @mySQL;
-        SET @mySQL = N'ALTER DATABASE [' + @DatabaseName + '] SET READ_WRITE;';
-        EXEC sp_executesql @mySQL;
-    END TRY
-    BEGIN CATCH
-        PRINT 'Error occurred during the restore operation for database ' + @DatabaseName;
-        PRINT ERROR_MESSAGE();
-        RETURN;
-    END CATCH
-
-    SET @Counter = @Counter + 1;
-END
 "@
 
-# Execute the SQL restore script
-try {
-    Invoke-DbaQuery -Query $sqlRestore -SqlInstance $SqlConnection
-    Write-Host "Databases restored successfully and set to READ_WRITE mode."
-} catch {
-    Write-Host "An error occurred during the restoration process." -ForegroundColor Red
-    exit
+    try {
+        Invoke-DbaQuery -Query $sqlRestore -SqlInstance $SqlConnection
+        Write-Host "Databases restored successfully and set to READ_WRITE mode."
+    } catch {
+        Write-Host "An error occurred during the restoration process: $($_.Exception.Message)" -ForegroundColor Red
+        exit
+    }
+
+    # Step 4: Update baseline script with actual paths
+    Write-Host "Updating baseline script with logical paths..."
+    $baselineFilePath = Join-Path $projectDir "scripts\temp\baselineTemplate.sql"
+    $updatedBaselinePath = Join-Path $projectDir "migrations\B001__Baseline.sql"
+
+    if (Test-Path $baselineFilePath) {
+        Get-Content $baselineFilePath | ForEach-Object {
+            $_ -replace "TEMPORARYBACKUP", $backupFileName `
+            -replace "TEMPORARYDATAFILENAME", $logicalDataFileName `
+            -replace "TEMPORARYLOGFILENAME", $logicalLogFileName
+        } | Set-Content $updatedBaselinePath
+        Write-Host "Baseline script updated successfully."
+    } else {
+        Write-Host "Baseline template file not found: $baselineFilePath" -ForegroundColor Red
+    }
 }
 
-# Step 4: Update baseline script with actual paths
-Write-Host "Updating baseline script with logical paths..."
-$baselineFilePath = Join-Path $projectDir "scripts\temp\baselineTemplate.sql"
-$updatedBaselinePath = Join-Path $projectDir "migrations\B001__Baseline.sql"
+# Calculate minutes and seconds separately and round to appropriate values
+$minutes = [math]::Floor($processDuration.TotalMinutes)
+$seconds = $processDuration.Seconds
 
-Get-Content $baselineFilePath | ForEach-Object {
-    $_ -replace "TEMPORARYBACKUP", $backupFileName `
-       -replace "TEMPORARYDATAFILENAME", $logicalDataFileName `
-       -replace "TEMPORARYLOGFILENAME", $logicalLogFileName
-} | Set-Content $updatedBaselinePath
+# Display process completion summary
+Write-Host "All AutoPilot databases have been successfully created in the environment named '$serverName'." -ForegroundColor Green
+Write-Host "The overall process took $minutes minutes and $seconds seconds."
 
-Write-Host "Baseline script updated successfully."
+# Await user key press before closing the window
+Write-Host "Press any key to close this window..."
+[System.Console]::ReadKey() | Out-Null
