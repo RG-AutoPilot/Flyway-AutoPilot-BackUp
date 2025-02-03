@@ -233,6 +233,35 @@ $seconds = $processDuration.Seconds
 Write-Host "All AutoPilot databases have been successfully created in the environment named '$serverName'." -ForegroundColor Green
 Write-Host "The overall process took $minutes minutes and $seconds seconds."
 
+Write-Host "Updating Flyway.toml project file to reference new backup file location ($backupPath)" -ForegroundColor Yellow
+# Path to Flyway TOML file
+$tomlFilePath = Join-Path $defaultProjectDir "flyway.toml"
+
+# Ensure the file exists before attempting to modify it
+if (Test-Path -Path $tomlFilePath) {
+    # Read the TOML file content
+    $tomlContent = Get-Content -Path $tomlFilePath -Raw
+
+    # Regular expression pattern to find all occurrences of backupFilePath = "somepath"
+    $pattern = '(backupFilePath\s*=\s*)".*?"'
+
+    # Escape the new backup path for TOML format (only double slashes)
+    $escapedBackupPath = $backupPath -replace '\\', '\\'
+
+    # Replace all instances of backupFilePath with the new path
+    $updatedTomlContent = $tomlContent -replace $pattern, "`$1`"$escapedBackupPath`""
+
+    # Write back the modified content
+    Set-Content -Path $tomlFilePath -Value $updatedTomlContent
+
+    Write-Host "Updated flyway.toml: All 'backupFilePath' entries now point to $backupPath" -ForegroundColor Green
+} else {
+    Write-Host "flyway.toml file not found at: $tomlFilePath" -ForegroundColor Red
+    Write-Host "Tip - Either update the flyway.toml file manually or edit environments Shadow/Check/Build in Flyway Desktop to point to the new backup location"
+    Write-Host "New backup location - $backupPath"
+}
+
+Write-Host "Autopilot for Flyway - Database Creation Complete" 
 # Await user key press before closing the window
 Write-Host "Press any key to close this window..."
 [System.Console]::ReadKey() | Out-Null

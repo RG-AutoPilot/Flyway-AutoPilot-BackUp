@@ -14,7 +14,7 @@ provisioner = "backup"
 
 [environments.shadow.resolvers.backup]
 backupVersion = "001"
-backupFilePath = "C:\\git\\AutoPilot\\backups\\AutoBackup_AdventureWorks2016.bak"
+backupFilePath = "C:\\Git\\AutoPilot\\backups\\AutoBackup.bak"
 
   [environments.shadow.resolvers.backup.sqlserver]
   generateWithMove = true
@@ -33,7 +33,7 @@ displayName = "Check (Reporting) database"
 provisioner = "backup"
 
 [environments.Check.resolvers.backup]
-backupFilePath = "C:\\git\\AutoPilot\\backups\\AutoBackup_AdventureWorks2016.bak"
+backupFilePath = "C:\\Git\\AutoPilot\\backups\\AutoBackup.bak"
 backupVersion = "001"
 
   [environments.Check.resolvers.backup.sqlserver]
@@ -45,7 +45,7 @@ displayName = "Build database"
 provisioner = "backup"
 
 [environments.Build.resolvers.backup]
-backupFilePath = "C:\\git\\AutoPilot\\backups\\AutoBackup_AdventureWorks2016.bak"
+backupFilePath = "C:\\Git\\AutoPilot\\backups\\AutoBackup.bak"
 backupVersion = "001"
 
   [environments.Build.resolvers.backup.sqlserver]
@@ -63,8 +63,8 @@ baselineVersion = "001"
 [flyway.sqlserver.clean]
 mode = "all"
 
-  [flyway.sqlserver.clean.schemas]
-  exclude = [ "ExampleSchema1", "ExampleSchema2" ]
+[flyway.sqlserver.clean.schemas]
+exclude = [ "ExampleSchema1", "ExampleSchema2" ]
 
 [flywayDesktop]
 developmentEnvironment = "development"
