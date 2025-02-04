@@ -154,7 +154,7 @@ foreach ($db in $databases) {
 
 # Backup AutoPilotDev for future use
 Write-Host "Backing up AutoPilotDev..."
-Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -Path $backupPath -Type Full -CompressBackup
+Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -Path $backupPath -Type Full
 Write-Host "Schema Only Backup of AutoPilotDev created at $backupPath."
 
 # Calculate duration
