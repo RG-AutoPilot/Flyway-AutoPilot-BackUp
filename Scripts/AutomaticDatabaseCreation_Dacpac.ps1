@@ -1,3 +1,16 @@
+# AutoPilot Database Setup Script
+# This script automates the setup of AutoPilot databases using Redgate's Flyway and dbatools.
+# The following steps outline the process, which can also be performed manually in SSMS:
+#
+# 1. Ensures the dbatools module is installed.
+# 2. Collects user input for the source database and SQL Server instance.
+# 3. Retrieve the default SQL Server database file paths.
+# 4. Export the schema of the source database to a fixed DACPAC file.
+# 5. Retrieve the logical file names from the source database.
+# 6. Deploy AutoPilotDev, AutoPilotTest, and AutoPilotProd using the DACPAC.
+# 7. Backup AutoPilotDev as a Schema Only Backup for use as a baseline in Flyway.
+# 8. Update Flyway.toml to reference the new backup file.
+
 # Ensure dbatools module is installed
 if (!(Get-Module -ListAvailable -Name dbatools)) {
   Write-Host "dbatools module not found. Installing module..."
@@ -75,6 +88,8 @@ $backupFileName = "AutoBackup_$sourceDB.bak"
 $backupPath = Join-Path $backupDir $backupFileName
 $dacpacName = "$sourceDB.dacpac"
 $dacpacPath = Join-Path $backupDir $dacpacName
+
+Write-Host "Final backup path is: $backupPath"
 
 $serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
   -ErrorMessage "Server name cannot be empty. Please provide a valid server name."
@@ -154,7 +169,7 @@ foreach ($db in $databases) {
 
 # Backup AutoPilotDev for future use
 Write-Host "Backing up AutoPilotDev..."
-Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -Path $backupPath -Type Full
+Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -FilePath $backupPath -Type Full -IgnoreFileChecks
 Write-Host "Schema Only Backup of AutoPilotDev created at $backupPath."
 
 # Calculate duration
