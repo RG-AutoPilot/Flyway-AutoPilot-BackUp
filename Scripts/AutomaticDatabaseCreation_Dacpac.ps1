@@ -11,6 +11,18 @@
 # 7. Backup AutoPilotDev as a Schema Only Backup for use as a baseline in Flyway.
 # 8. Update Flyway.toml to reference the new backup file.
 
+# Parameter List - These are optional input parameters
+param (
+    [string]$projectDir,
+    [string]$serverName,
+    [string]$sourceDB,
+    [ValidateSet("Y", "N")][string]$TrustCert,
+    [ValidateSet("Y", "N")][string]$EncryptConnection,
+    [string]$backupDir,
+    [string]$dacpacFile
+)
+
+
 # Ensure dbatools module is installed
 if (!(Get-Module -ListAvailable -Name dbatools)) {
   Write-Host "dbatools module not found. Installing module..."
@@ -40,11 +52,11 @@ Write-Host "Step 1: Provide the connection details for your preferred PoC databa
 Write-Host "Tip - Restore your preferred database into a non-production SQL Server Instance. This will help to create our PoC sandbox, where the AutoPilot databases will also exist."
 
 # Prompt for inputs with validation
-$sourceDB = Get-ValidatedInput -PromptMessage "Enter the Source Database Name to be Schema Backed Up (e.g., MyDatabaseName)" `
-  -ErrorMessage "Database name cannot be empty. Please provide a valid database name."
+if (-not $sourceDB) { $sourceDB = Get-ValidatedInput -PromptMessage "Enter the Source Database Name to be Schema Backed Up (e.g., MyDatabaseName)" `
+  -ErrorMessage "Database name cannot be empty. Please provide a valid database name." }
 
 # Detect AutoPilot root directory based on the script's current location
-if ($PSScriptRoot) {
+if ($PSScriptRoot -and -not $projectDir) {
   $defaultProjectDir = Split-Path -Path $PSScriptRoot -Parent
   Write-Host "Detected Autopilot Root Project path: $defaultProjectDir" -ForegroundColor Green
 } else {
@@ -52,12 +64,14 @@ if ($PSScriptRoot) {
   $defaultProjectDir = $null
 }
 
-$projectDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new path"
+if (-not $projectDir) {
+  $projectDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new path"
+}
 
-# Use detected path if user doesn't provide a new one
 if ([string]::IsNullOrWhiteSpace($projectDir)) {
   $projectDir = $defaultProjectDir
 }
+
 
 # Validate project directory exists
 if (!(Test-Path -Path $projectDir)) {
@@ -75,9 +89,16 @@ if (!(Test-Path -Path $defaultBackupDir)) {
   New-Item -Path $defaultBackupDir -ItemType Directory | Out-Null
 }
 
-Write-Host "Detected Autopilot Default Backup Folder: $defaultBackupDir"
+if ($backupDir) {
+  Write-Host "Detected Autopilot Parameter Backup Folder: $backupDir"
+}
+else {
+   Write-Host "Detected Autopilot Default Backup Folder: $defaultBackupDir"
+}
 
-$backupDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new backup folder path"
+if (-not $backupDir) {
+  $backupDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new backup folder path"
+}
 
 # Use detected path if user doesn't provide a new one
 if ([string]::IsNullOrWhiteSpace($backupDir)) {
@@ -91,55 +112,59 @@ $dacpacPath = Join-Path $backupDir $dacpacName
 
 Write-Host "Final backup path is: $backupPath"
 
-$serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
+if (-not $serverName) { $serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
   -ErrorMessage "Server name cannot be empty. Please provide a valid server name."
+}
 
-# Prompt for server certificate and encryption settings
-do {
-  $trustCert = Read-Host "Do you need to trust the Server Certificate? (Y/N)"
-  $trustCert = $trustCert.ToUpper()
-} until ($trustCert -match "^(Y|N)$")
 
-do {
-  $encryptConnection = Read-Host "Do you need to encrypt the connection? (Y/N)"
-  $encryptConnection = $encryptConnection.ToUpper()
-} until ($encryptConnection -match "^(Y|N)$")
+if (-not $trustCert) {
+  do {
+      $trustCert = Read-Host "Do you need to trust the Server Certificate? (Y/N)"
+      $trustCert = $trustCert.ToUpper()
+  } until ($trustCert -match "^(Y|N)$")
+}
+
+if (-not $encryptConnection) {
+  do {
+      $encryptConnection = Read-Host "Do you need to encrypt the connection? (Y/N)"
+      $encryptConnection = $encryptConnection.ToUpper()
+  } until ($encryptConnection -match "^(Y|N)$")
+}
 
 # Determine SQL Connection Parameters
 $sqlParams = "-SqlInstance `"$serverName`""
 if ($trustCert -eq 'Y') { $sqlParams += " -TrustServerCertificate" }
 if ($encryptConnection -eq 'Y') { $sqlParams += " -EncryptConnection" }
-$SqlConnection = Invoke-Expression "Connect-DbaInstance $sqlParams"
+Invoke-Expression "Connect-DbaInstance $sqlParams"
 
 # Start timer
 $startTime = Get-Date
 
-# Export schema to DACPAC
-Write-Host "Exporting database schema to DACPAC..."
-Export-DbaDacPackage -SqlInstance $serverName -Database $sourceDB -FilePath $dacpacPath
-Write-Host "DACPAC export complete. Saved as $dacpacName."
+# Create DACPAC file if not passed in as a parameter
+if ($dacpacFile) {
+  Write-Host "Using provided DACPAC file: $dacpacFile"
+  $dacpacPath = $dacpacFile
+} else {
+  Write-Host "Exporting database schema to DACPAC..."
+  try{
+      Export-DbaDacPackage -SqlInstance $ServerName -Database $sourceDB -FilePath $dacpacPath
+      # Verify if the DACPAC file was created
+      if (!(Test-Path -Path $dacpacPath)) {
+        throw "DACPAC export failed: File was not created at $dacpacPath."
+      }
+      Write-Host "DACPAC export complete. Saved as $dacpacName."
+   } catch {
+      Write-Host "Error exporting DACPAC: $_" -ForegroundColor Red
+      exit 1
+    }
+}
 
-# Retrieve logical file names from the source database
-Write-Host "Retrieving logical file names from source database..."
-$sqlFileList = "SELECT name, type_desc FROM sys.master_files WHERE database_id = DB_ID('$sourceDB')"
-$fileList = Invoke-DbaQuery -SqlInstance $serverName -Query $sqlFileList
 
-$logicalDataFileName = $fileList | Where-Object { $_.type_desc -eq 'ROWS' } | Select-Object -ExpandProperty name
-$logicalLogFileName = $fileList | Where-Object { $_.type_desc -eq 'LOG' } | Select-Object -ExpandProperty name
-
-Write-Host "Logical Data File Name: $logicalDataFileName"
-Write-Host "Logical Log File Name: $logicalLogFileName"
-
-# Retrieve default database file locations
-$sqlPaths = "SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS NVARCHAR(200)) AS DataPath, CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS NVARCHAR(200)) AS LogPath"
-$defaultPaths = Invoke-DbaQuery -SqlInstance $serverName -Query $sqlPaths
-$dataPath = $defaultPaths.DataPath
-$logPath = $defaultPaths.LogPath
-
-# Deploy AutoPilot databases
+# Autopilot Database List
 $databases = @("AutoPilotDev", "AutoPilotTest", "AutoPilotProd", "AutoPilotShadow", "AutoPilotBuild", "AutoPilotCheck")
 
 # Check for existing databases
+Write-Host "Checking if Autopilot databases already exist in target environment"
 $existingDatabases = @()
 foreach ($db in $databases) {
   if (Get-DbaDatabase -SqlInstance $serverName -Database $db -ErrorAction SilentlyContinue) {
@@ -147,6 +172,7 @@ foreach ($db in $databases) {
   }
 }
 
+# Outline if any databases already exist
 if ($existingDatabases.Count -gt 0) {
   Write-Host "The following databases already exist: $($existingDatabases -join ', ')" -ForegroundColor Yellow
   $overwrite = Read-Host "Do you want to overwrite them? (Y/N)" | ForEach-Object { $_.ToUpper() }
@@ -156,28 +182,39 @@ if ($existingDatabases.Count -gt 0) {
   }
 }
 
+# Create AutoPilotDev/Test/Prod using DACPAC & Create AutoPilotBuild/Check/Shadow as an empty databases
 foreach ($db in $databases) {
   Write-Host "Creating database: $db..."
-  if ($db -in @("AutoPilotDev", "AutoPilotTest", "AutoPilotProd")) {
-      # Deploy database from DACPAC
-      Publish-DbaDacPackage -SqlInstance $serverName -Database $db -Path $dacpacPath
-      Write-Host "$db deployed from DACPAC."
-  } else {
-      New-DbaDatabase -SqlInstance $serverName -Name $db
-  }
+  try {
+      if ($db -in @("AutoPilotDev", "AutoPilotTest", "AutoPilotProd")) {
+          # Deploy database from DACPAC
+          Publish-DbaDacPackage -SqlInstance $serverName -Database $db -Path $dacpacPath
+          Write-Host "$db deployed from DACPAC."
+      } else {
+          New-DbaDatabase -SqlInstance $serverName -Name $db
+      }
+    } catch {
+        Write-Host "Error deploying database $db : $_" -ForegroundColor Red
+        exit 1
+    }
 }
 
-# Backup AutoPilotDev for future use
+# Backup AutoPilotDev database to use as baseline
 Write-Host "Backing up AutoPilotDev..."
-Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -FilePath $backupPath -Type Full -IgnoreFileChecks
-Write-Host "Schema Only Backup of AutoPilotDev created at $backupPath."
+try {
+      Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -FilePath $backupPath -Type Full -IgnoreFileChecks
+      Write-Host "Schema Only Backup of AutoPilotDev created at $backupPath."
+    } catch {
+      Write-Host "Error creating backup: $_" -ForegroundColor Red
+      exit 1
+    }
 
-# Calculate duration
+# Calculate duration of above steps
 $endTime = Get-Date
 $duration = $endTime - $startTime
 Write-Host "All AutoPilot databases created on '$serverName' in $($duration.Minutes) minutes and $($duration.Seconds) seconds."
 
-# Update Flyway.toml
+# Update Flyway.toml with latest backup location
 $tomlFilePath = Join-Path $projectDir "flyway.toml"
 if (Test-Path -Path $tomlFilePath) {
   $tomlContent = Get-Content -Path $tomlFilePath -Raw
@@ -191,6 +228,6 @@ if (Test-Path -Path $tomlFilePath) {
 }
 
 Write-Host "Autopilot for Flyway - Database Creation Complete" 
-# Await user key press before closing the window
+# Require key press to complete PowerShell terminal
 Write-Host "Press any key to close this window..."
 [System.Console]::ReadKey() | Out-Null
