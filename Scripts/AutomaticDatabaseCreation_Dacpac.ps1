@@ -1,15 +1,13 @@
-# AutoPilot Database Setup Script
-# This script automates the setup of AutoPilot databases using Redgate's Flyway and dbatools.
+# AutoPilot Database Setup Process - DACPAC Method
+# This script automates the setup of the Autopilot project databases as well as creating a schema only backup for use a baseline
 # The following steps outline the process, which can also be performed manually in SSMS:
 #
-# 1. Ensures the dbatools module is installed.
-# 2. Collects user input for the source database and SQL Server instance.
-# 3. Retrieve the default SQL Server database file paths.
-# 4. Export the schema of the source database to a fixed DACPAC file.
-# 5. Retrieve the logical file names from the source database.
-# 6. Deploy AutoPilotDev, AutoPilotTest, and AutoPilotProd using the DACPAC.
-# 7. Backup AutoPilotDev as a Schema Only Backup for use as a baseline in Flyway.
-# 8. Update Flyway.toml to reference the new backup file.
+# 1. Ensures the dbatools module is installed (Required by PowerShell)
+# 2. SQL Server and Source Database details captured
+# 3. Export the schema of the source database to a fixed DACPAC file.
+# 4. Create databases AutoPilotDev, AutoPilotTest, and AutoPilotProd using the DACPAC.
+# 5. Backup AutoPilotDev as a Schema Only Backup for use as a baseline in Flyway.
+# 6. Update Flyway.toml to reference the new backup file location.
 
 # Parameter List - These are optional input parameters
 param (
@@ -18,8 +16,8 @@ param (
     [string]$sourceDB,
     [ValidateSet("Y", "N")][string]$TrustCert,
     [ValidateSet("Y", "N")][string]$EncryptConnection,
-    [string]$backupDir,
-    [string]$dacpacFile
+    [string]$backupPath,
+    [string]$dacpacPath
 )
 
 
@@ -81,34 +79,31 @@ if (!(Test-Path -Path $projectDir)) {
 
 Write-Host "Project directory confirmed: $projectDir"
 
-# Setup backup directory and paths
-$defaultBackupDir = Join-Path $projectDir "backups"
-
-# Ensure backup directory exists
-if (!(Test-Path -Path $defaultBackupDir)) {
-  New-Item -Path $defaultBackupDir -ItemType Directory | Out-Null
-}
-
-if ($backupDir) {
-  Write-Host "Detected Autopilot Parameter Backup Folder: $backupDir"
+if ($backupPath) {
+  Write-Host "Detected Autopilot Parameter Backup Folder: $backupPath"
 }
 else {
-   Write-Host "Detected Autopilot Default Backup Folder: $defaultBackupDir"
+    # Setup backup directory and paths
+    $defaultBackupDir = Join-Path $projectDir "backups"
+
+    # Ensure backup directory exists
+    if (!(Test-Path -Path $defaultBackupDir)) {
+      New-Item -Path $defaultBackupDir -ItemType Directory | Out-Null
+    }
+    Write-Host "Detected Autopilot Default Backup Folder: $defaultBackupDir"
 }
 
-if (-not $backupDir) {
-  $backupDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new backup folder path"
+if (-not $backupPath) {
+  $backupPath = Read-Host "Do you want to use backup path above? Press Enter to confirm or provide a new backup folder path"
 }
 
 # Use detected path if user doesn't provide a new one
-if ([string]::IsNullOrWhiteSpace($backupDir)) {
-  $backupDir = $defaultBackupDir
+if ([string]::IsNullOrWhiteSpace($backupPath)) {
+  $backupPath = $defaultBackupDir
 }
 
 $backupFileName = "AutoBackup_$sourceDB.bak"
-$backupPath = Join-Path $backupDir $backupFileName
-$dacpacName = "$sourceDB.dacpac"
-$dacpacPath = Join-Path $backupDir $dacpacName
+$backupFilePath = Join-Path $backupPath $backupFileName
 
 Write-Host "Final backup path is: $backupPath"
 
@@ -141,11 +136,13 @@ Invoke-Expression "Connect-DbaInstance $sqlParams"
 $startTime = Get-Date
 
 # Create DACPAC file if not passed in as a parameter
-if ($dacpacFile) {
-  Write-Host "Using provided DACPAC file: $dacpacFile"
-  $dacpacPath = $dacpacFile
+if ($dacpacPath) {
+  Write-Host "Using provided DACPAC file: $dacpacPath"
+  $dacpacPath = $dacpacPath
 } else {
   Write-Host "Exporting database schema to DACPAC..."
+  $dacpacName = "$sourceDB.dacpac"
+  $dacpacPath = Join-Path $backupPath $dacpacName
   try{
       Export-DbaDacPackage -SqlInstance $ServerName -Database $sourceDB -FilePath $dacpacPath
       # Verify if the DACPAC file was created
@@ -202,7 +199,7 @@ foreach ($db in $databases) {
 # Backup AutoPilotDev database to use as baseline
 Write-Host "Backing up AutoPilotDev..."
 try {
-      Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -FilePath $backupPath -Type Full -IgnoreFileChecks
+      Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -FilePath $backupFilePath -Type Full -IgnoreFileChecks
       Write-Host "Schema Only Backup of AutoPilotDev created at $backupPath."
     } catch {
       Write-Host "Error creating backup: $_" -ForegroundColor Red
