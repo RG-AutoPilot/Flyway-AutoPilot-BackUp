@@ -1,5 +1,5 @@
 # AutoPilot Database Setup Process - DACPAC Method
-# This script automates the setup of the Autopilot project databases as well as creating a schema only backup for use a baseline
+# This script automates the setup of the Autopilot project databases as well as creating a schema only backup for use as a baseline
 # The following steps outline the process, which can also be performed manually in SSMS:
 #
 # 1. Ensures the dbatools module is installed (Required by PowerShell)
@@ -10,12 +10,14 @@
 # 6. Update Flyway.toml to reference the new backup file location.
 
 # Parameter List - These are optional input parameters
+# Use Case - BACPAC file created manually already and can be passed to the script for use
+# Example Command - .\AutomaticDatabaseCreation_Dacpac.ps1 -projectDir "C:\Git\Flyway-AutoPilot-BackUp" -serverName "Localhost" -sourceDB "MySourceDBName" -trustCert "Y" -encryptConnection "Y" -backupPath "C:\Git\Flyway-AutoPilot-BackUp\Backups" -dacpacPath "C:\Git\Flyway-AutoPilot-BackUp\AdventureWorks.dacpac"
 param (
     [string]$projectDir,
     [string]$serverName,
     [string]$sourceDB,
-    [ValidateSet("Y", "N")][string]$TrustCert,
-    [ValidateSet("Y", "N")][string]$EncryptConnection,
+    [ValidateSet("Y", "N")][string]$trustCert,
+    [ValidateSet("Y", "N")][string]$encryptConnection,
     [string]$backupPath,
     [string]$dacpacPath
 )
@@ -34,16 +36,30 @@ if (!(Get-Module -ListAvailable -Name dbatools)) {
 function Get-ValidatedInput {
   param (
       [string]$PromptMessage,
+      [ValidateScript({$_ -ne ''})] # Ensure input is not empty
       [string]$ErrorMessage
   )
+
   do {
+      # Set the prompt message color to yellow
+      $oldColor = $Host.UI.RawUI.ForegroundColor
+      $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Yellow
+
+      # Prompt the user and capture the input
       $inputValue = Read-Host $PromptMessage
+
+      # Restore original color
+      $Host.UI.RawUI.ForegroundColor = $oldColor
+
+      # If input is empty or whitespace, show the error message in red
       if ([string]::IsNullOrWhiteSpace($inputValue)) {
           Write-Host $ErrorMessage -ForegroundColor Red
       }
   } until (![string]::IsNullOrWhiteSpace($inputValue))
+
   return $inputValue
 }
+
 
 Write-Host "Flyway AutoPilot Backup & Running Setup - To get up and running, it's necessary to create a Schema Only backup of a chosen database. This will then be used to create your AutoPilot project databases."
 Write-Host "Step 1: Provide the connection details for your preferred PoC database"
@@ -80,7 +96,7 @@ if (!(Test-Path -Path $projectDir)) {
 Write-Host "Project directory confirmed: $projectDir"
 
 if ($backupPath) {
-  Write-Host "Detected Autopilot Parameter Backup Folder: $backupPath"
+  Write-Host "Detected Autopilot Parameter Backup Folder: $backupPath" -ForegroundColor Green
 }
 else {
     # Setup backup directory and paths
@@ -90,7 +106,7 @@ else {
     if (!(Test-Path -Path $defaultBackupDir)) {
       New-Item -Path $defaultBackupDir -ItemType Directory | Out-Null
     }
-    Write-Host "Detected Autopilot Default Backup Folder: $defaultBackupDir"
+    Write-Host "Detected Autopilot Default Backup Folder: $defaultBackupDir" -ForegroundColor Green
 }
 
 if (-not $backupPath) {
@@ -114,14 +130,14 @@ if (-not $serverName) { $serverName = Get-ValidatedInput -PromptMessage "Enter t
 
 if (-not $trustCert) {
   do {
-      $trustCert = Read-Host "Do you need to trust the Server Certificate? (Y/N)"
+      $trustCert = Get-ValidatedInput -PromptMessage "Do you need to trust the Server Certificate? (Y/N)" -ErrorMessage "Trust Server Certificate cannot be left blank, please try again."
       $trustCert = $trustCert.ToUpper()
   } until ($trustCert -match "^(Y|N)$")
 }
 
 if (-not $encryptConnection) {
   do {
-      $encryptConnection = Read-Host "Do you need to encrypt the connection? (Y/N)"
+      $encryptConnection = Get-ValidatedInput -PromptMessage "Do you need to encrypt the connection? (Y/N)" -ErrorMessage "Encrypt connection cannot be left blank, please try again."
       $encryptConnection = $encryptConnection.ToUpper()
   } until ($encryptConnection -match "^(Y|N)$")
 }
@@ -139,6 +155,9 @@ $startTime = Get-Date
 if ($dacpacPath) {
   Write-Host "Using provided DACPAC file: $dacpacPath"
   $dacpacPath = $dacpacPath
+  if (!(Test-Path -Path $dacpacPath)) {
+    throw "DACPAC export failed: File was not accessible at $dacpacPath."
+  }
 } else {
   Write-Host "Exporting database schema to DACPAC..."
   $dacpacName = "$sourceDB.dacpac"
@@ -185,10 +204,10 @@ foreach ($db in $databases) {
   try {
       if ($db -in @("AutoPilotDev", "AutoPilotTest", "AutoPilotProd")) {
           # Deploy database from DACPAC
-          Publish-DbaDacPackage -SqlInstance $serverName -Database $db -Path $dacpacPath
+          Publish-DbaDacPackage -SqlInstance $serverName -Database $db -Path $dacpacPath -EnableException
           Write-Host "$db deployed from DACPAC."
       } else {
-          New-DbaDatabase -SqlInstance $serverName -Name $db
+          New-DbaDatabase -SqlInstance $serverName -Name $db -EnableException
       }
     } catch {
         Write-Host "Error deploying database $db : $_" -ForegroundColor Red
@@ -199,7 +218,7 @@ foreach ($db in $databases) {
 # Backup AutoPilotDev database to use as baseline
 Write-Host "Backing up AutoPilotDev..."
 try {
-      Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -FilePath $backupFilePath -Type Full -IgnoreFileChecks
+      Backup-DbaDatabase -SqlInstance $serverName -Database "AutoPilotDev" -FilePath $backupFilePath -Type Full -IgnoreFileChecks -EnableException
       Write-Host "Schema Only Backup of AutoPilotDev created at $backupPath."
     } catch {
       Write-Host "Error creating backup: $_" -ForegroundColor Red
@@ -214,12 +233,22 @@ Write-Host "All AutoPilot databases created on '$serverName' in $($duration.Minu
 # Update Flyway.toml with latest backup location
 $tomlFilePath = Join-Path $projectDir "flyway.toml"
 if (Test-Path -Path $tomlFilePath) {
+  # Read the TOML file content
   $tomlContent = Get-Content -Path $tomlFilePath -Raw
+
+  # Regular expression pattern to find all occurrences of backupFilePath = "somepath"
   $pattern = '(backupFilePath\s*=\s*)".*?"'
-  $escapedBackupPath = $backupPath -replace '\\', '\\\\'
+
+  # Escape the new backup path for TOML format (only double slashes)
+  $escapedBackupPath = $backupFilePath -replace '\\', '\\'
+
+  # Replace all instances of backupFilePath with the new path
   $updatedTomlContent = $tomlContent -replace $pattern, "`$1`"$escapedBackupPath`""
+
+  # Write back the modified content
   Set-Content -Path $tomlFilePath -Value $updatedTomlContent
-  Write-Host "Updated Flyway.toml to reference $backupPath" -ForegroundColor Green
+
+  Write-Host "Updated flyway.toml: All 'backupFilePath' entries now point to $backupFilePath" -ForegroundColor Green
 } else {
   Write-Host "Flyway.toml not found. Please update manually." -ForegroundColor Red
 }
