@@ -1,3 +1,26 @@
+# AutoPilot Database Setup Process - DBCC Method
+# This script automates the setup of the Autopilot project databases as well as creating a schema only backup for use as a baseline
+# The following steps outline the process, which can also be performed manually in SSMS:
+#
+# 1. Ensures the dbatools module is installed (Required by PowerShell)
+# 2. SQL Server and Source Database details captured
+# 3. Creates Schema Only backup of the source database using DBCC
+# 4. Creates AutoPilot databases using Backup
+# 5. Update Flyway.toml to reference the new backup file location.
+
+# Parameter List - These are optional input parameters
+# Use Case - BACPAC file created manually already and can be passed to the script for use
+# Example Command - .\AutomaticDatabaseCreation_DBCC.ps1 -projectDir "C:\Git\Flyway-AutoPilot-BackUp" -serverName "Localhost" -sourceDB "MySourceDBName" -trustCert "Y" -encryptConnection "Y" -backupPath "C:\Git\Flyway-AutoPilot-BackUp\Backups" 
+param (
+    [string]$projectDir,
+    [string]$serverName,
+    [string]$sourceDB,
+    [ValidateSet("Y", "N")][string]$TrustCert,
+    [ValidateSet("Y", "N")][string]$EncryptConnection,
+    [string]$backupPath
+)
+
+
 # dbatools MODULE NEEDED
 if (!(Get-Module -ListAvailable -Name dbatools)) {
     Write-Host "dbatools module not found. Installing module..."
@@ -41,11 +64,11 @@ Write-Host "Step 1: Provide the connection details for your preferred PoC databa
 Write-Host "Tip - Restore your preferred database into a non-production SQL Server Instance. This will help to create our PoC sandbox, where the AutoPilot databases will also exist."
 
 # Prompt for inputs with validation
-$sourceDB = Get-ValidatedInput -PromptMessage "Enter the Source Database Name to be Schema Backed Up (e.g., MyDatabaseName)" `
-    -ErrorMessage "Database name cannot be empty. Please provide a valid database name."
+if (-not $sourceDB) { $sourceDB = Get-ValidatedInput -PromptMessage "Enter the Source Database Name to be Schema Backed Up (e.g., MyDatabaseName)" `
+  -ErrorMessage "Database name cannot be empty. Please provide a valid database name." }
 
 # Detect AutoPilot root directory based on the script's current location
-if ($PSScriptRoot) {
+if ($PSScriptRoot -and -not $projectDir) {
     $defaultProjectDir = Split-Path -Path $PSScriptRoot -Parent
     Write-Host "Detected AutoPilot Root Project path: $defaultProjectDir" -ForegroundColor Green
 } else {
@@ -53,7 +76,9 @@ if ($PSScriptRoot) {
     $defaultProjectDir = $null
 }
 
-$projectDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new path"
+if (-not $projectDir) {
+    $projectDir = Read-Host "Do you want to use this path? Press Enter to confirm or provide a new path"
+  }
 
 # Use detected path if user doesn't provide a new one
 if ([string]::IsNullOrWhiteSpace($projectDir)) {
@@ -68,29 +93,58 @@ if (!(Test-Path -Path $projectDir)) {
 
 Write-Host "Project directory confirmed: $projectDir"
 
-$backupDir = Join-Path $projectDir "backups"
+if ($backupPath) {
+    Write-Host "Detected Autopilot Parameter Backup Folder: $backupPath" -ForegroundColor Green
+  }
+  else {
+      # Setup backup directory and paths
+      $defaultBackupDir = Join-Path $projectDir "backups"
+  
+      # Ensure backup directory exists
+      if (!(Test-Path -Path $defaultBackupDir)) {
+        New-Item -Path $defaultBackupDir -ItemType Directory | Out-Null
+      }
+      Write-Host "Detected Autopilot Default Backup Folder: $defaultBackupDir" -ForegroundColor Green
+  }
+  
+  if (-not $backupPath) {
+    $backupPath = Read-Host "Do you want to use backup path above? Press Enter to confirm or provide a new backup folder path"
+  }
 
-$serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
-    -ErrorMessage "Server name cannot be empty. Please provide a valid server name."
-
+# Use detected path if user doesn't provide a new one
+if ([string]::IsNullOrWhiteSpace($backupPath)) {
+    $backupPath = $defaultBackupDir
+  }
+  
 $backupFileName = "AutoBackup_$sourceDB.bak"
-$backupPath = Join-Path $backupDir $backupFileName
+$backupFilePath = Join-Path $backupPath $backupFileName
 
-# Ensure the backup directory exists
-if (!(Test-Path -Path $backupDir)) {
-    New-Item -Path $backupDir -ItemType Directory | Out-Null
+Write-Host "Final backup path is: $backupPath"
+
+if (-not $serverName) { $serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
+  -ErrorMessage "Server name cannot be empty. Please provide a valid server name."
 }
 
 # Prompt for server certificate and encryption settings
-do {
-    $trustCert = Read-Host "Do you need to trust the Server Certificate? (Y/N)"
-    $trustCert = $trustCert.ToUpper()
-} until ($trustCert -match "^(Y|N)$")
-
-do {
-    $encryptConnection = Read-Host "Do you need to encrypt the connection? (Y/N)"
-    $encryptConnection = $encryptConnection.ToUpper()
-} until ($encryptConnection -match "^(Y|N)$")
+if (-not $trustCert) {
+    do {
+        $trustCert = Read-Host "Do you need to trust the Server Certificate? (Y/N)"
+        $trustCert = $trustCert.ToUpper()
+    } until ($trustCert -match "^(Y|N)$")
+  }
+  
+  if (-not $encryptConnection) {
+    do {
+        $encryptConnection = Read-Host "Do you need to encrypt the connection? (Y/N)"
+        $encryptConnection = $encryptConnection.ToUpper()
+    } until ($encryptConnection -match "^(Y|N)$")
+  }
+  
+#   # Determine SQL Connection Parameters
+#   $sqlParams = "-SqlInstance `"$serverName`""
+#   if ($trustCert -eq 'Y') { $sqlParams += " -TrustServerCertificate" }
+#   if ($encryptConnection -eq 'Y') { $sqlParams += " -EncryptConnection" }
+#   Invoke-Expression "Connect-DbaInstance $sqlParams"
 
 # Generate the SQL Server connection based on user preferences
 if ($trustCert -eq 'Y' -and $encryptConnection -eq 'Y') {
@@ -111,7 +165,7 @@ $processDuration = Measure-Command {
     $sqlCreateBackup = @"
     DECLARE @SourceDB NVARCHAR(128) = N'$sourceDB';
     DECLARE @BackupDB NVARCHAR(128) = @SourceDB + N'_Schema';
-    DECLARE @BackupPath NVARCHAR(256) = N'$backupPath';
+    DECLARE @BackupPath NVARCHAR(256) = N'$backupFilePath';
 
     DBCC CLONEDATABASE (@SourceDB, @BackupDB) WITH NO_STATISTICS, NO_QUERYSTORE, VERIFY_CLONEDB;
 
@@ -146,7 +200,7 @@ $processDuration = Measure-Command {
     # Step 3: Restore the backup to multiple environments
     Write-Host "Creating AutoPilot databases using provided backup..."
     $sqlRestore = @"
-    DECLARE @BackupFilePath NVARCHAR(128) = N'$backupPath'; 
+    DECLARE @BackupFilePath NVARCHAR(128) = N'$backupFilePath'; 
     DECLARE @LogicalDataFileName NVARCHAR(128) = N'$logicalDataFileName'; 
     DECLARE @LogicalLogFileName NVARCHAR(128) = N'$logicalLogFileName'; 
     DECLARE @DataFilePath NVARCHAR(260);  
@@ -233,7 +287,7 @@ $seconds = $processDuration.Seconds
 Write-Host "All AutoPilot databases have been successfully created in the environment named '$serverName'." -ForegroundColor Green
 Write-Host "The overall process took $minutes minutes and $seconds seconds."
 
-Write-Host "Updating Flyway.toml project file to reference new backup file location ($backupPath)" -ForegroundColor Yellow
+Write-Host "Updating Flyway.toml project file to reference new backup file location ($backupFilePath)" -ForegroundColor Yellow
 # Path to Flyway TOML file
 $tomlFilePath = Join-Path $defaultProjectDir "flyway.toml"
 
@@ -246,7 +300,7 @@ if (Test-Path -Path $tomlFilePath) {
     $pattern = '(backupFilePath\s*=\s*)".*?"'
 
     # Escape the new backup path for TOML format (only double slashes)
-    $escapedBackupPath = $backupPath -replace '\\', '\\'
+    $escapedBackupPath = $backupFilePath -replace '\\', '\\'
 
     # Replace all instances of backupFilePath with the new path
     $updatedTomlContent = $tomlContent -replace $pattern, "`$1`"$escapedBackupPath`""
@@ -254,11 +308,11 @@ if (Test-Path -Path $tomlFilePath) {
     # Write back the modified content
     Set-Content -Path $tomlFilePath -Value $updatedTomlContent
 
-    Write-Host "Updated flyway.toml: All 'backupFilePath' entries now point to $backupPath" -ForegroundColor Green
+    Write-Host "Updated flyway.toml: All 'backupFilePath' entries now point to $backupFilePath" -ForegroundColor Green
 } else {
     Write-Host "flyway.toml file not found at: $tomlFilePath" -ForegroundColor Red
     Write-Host "Tip - Either update the flyway.toml file manually or edit environments Shadow/Check/Build in Flyway Desktop to point to the new backup location"
-    Write-Host "New backup location - $backupPath"
+    Write-Host "New backup location - $backupFilePath"
 }
 
 Write-Host "Autopilot for Flyway - Database Creation Complete" 
