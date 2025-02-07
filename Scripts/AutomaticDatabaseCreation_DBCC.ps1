@@ -163,7 +163,7 @@ $processDuration = Measure-Command {
     # Step 1: Create the schema backup
     Write-Host "Creating a schema backup for $sourceDB..."
     $sqlCreateBackup = @"
-    DECLARE @SourceDB NVARCHAR(128) = N'$sourceDB';
+    DECLARE @SourceDB NVARCHAR(128) = LTRIM(RTRIM(N'$sourceDB'));
     DECLARE @BackupDB NVARCHAR(128) = @SourceDB + N'_Schema';
     DECLARE @BackupPath NVARCHAR(256) = N'$backupFilePath';
 
@@ -289,7 +289,7 @@ Write-Host "The overall process took $minutes minutes and $seconds seconds."
 
 Write-Host "Updating Flyway.toml project file to reference new backup file location ($backupFilePath)" -ForegroundColor Yellow
 # Path to Flyway TOML file
-$tomlFilePath = Join-Path $defaultProjectDir "flyway.toml"
+$tomlFilePath = Join-Path $projectDir "flyway.toml"
 
 # Ensure the file exists before attempting to modify it
 if (Test-Path -Path $tomlFilePath) {
