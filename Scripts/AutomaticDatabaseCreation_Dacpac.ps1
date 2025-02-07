@@ -10,7 +10,7 @@
 # 6. Update Flyway.toml to reference the new backup file location.
 
 # Parameter List - These are optional input parameters
-# Use Case - BACPAC file created manually already and can be passed to the script for use
+# Use Case - DACPAC file created manually already and can be passed to the script for use
 # Example Command - .\AutomaticDatabaseCreation_Dacpac.ps1 -projectDir "C:\Git\Flyway-AutoPilot-BackUp" -serverName "Localhost" -sourceDB "MySourceDBName" -trustCert "Y" -encryptConnection "Y" -backupPath "C:\Git\Flyway-AutoPilot-BackUp\Backups" -dacpacPath "C:\Git\Flyway-AutoPilot-BackUp\AdventureWorks.dacpac"
 param (
     [string]$projectDir,
