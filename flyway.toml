@@ -7,6 +7,7 @@ url = "jdbc:sqlserver://localhost;databaseName=AutoPilotDev;encrypt=true;integra
 schemas = [ ]
 displayName = "Development database"
 
+
 [environments.shadow]
 url = "jdbc:sqlserver://localhost;databaseName=AutoPilotShadow;encrypt=true;integratedSecurity=true;trustServerCertificate=true"
 displayName = "Shadow database"
