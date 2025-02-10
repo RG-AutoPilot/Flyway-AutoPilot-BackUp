@@ -124,6 +124,11 @@ Write-Host "Final backup path is: $backupPath"
 if (-not $serverName) { $serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
   -ErrorMessage "Server name cannot be empty. Please provide a valid server name."
 }
+# Ensure "." is replaced with "localhost" for serverName
+if ($serverName -eq ".") {
+    $serverName = "localhost"
+}
+
 
 # Prompt for server certificate and encryption settings
 if (-not $trustCert) {
@@ -318,4 +323,4 @@ if (Test-Path -Path $tomlFilePath) {
 Write-Host "Autopilot for Flyway - Database Creation Complete" 
 # Await user key press before closing the window
 Write-Host "Press any key to close this window..."
-[System.Console]::ReadKey() | Out-Null
+Read-Host "Press Enter to close this window..."

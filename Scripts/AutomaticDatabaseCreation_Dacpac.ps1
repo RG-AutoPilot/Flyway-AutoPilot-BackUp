@@ -123,8 +123,15 @@ $backupFilePath = Join-Path $backupPath $backupFileName
 
 Write-Host "Final backup path is: $backupPath"
 
-if (-not $serverName) { $serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
-  -ErrorMessage "Server name cannot be empty. Please provide a valid server name."
+if (-not $serverName) { 
+    $serverName = Get-ValidatedInput -PromptMessage "Enter the SQL Server Name (Source Database should reside here)" `
+    -ErrorMessage "Server name cannot be empty. Please provide a valid server name."
+}
+
+# Check if the server name is "." and change it to "localhost"
+if ($serverName -eq '.') {
+    $serverName = 'localhost'
+    Write-Host "SQL Server name set to 'localhost'."
 }
 
 
