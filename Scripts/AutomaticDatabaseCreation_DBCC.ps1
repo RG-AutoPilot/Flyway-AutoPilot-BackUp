@@ -322,5 +322,5 @@ if (Test-Path -Path $tomlFilePath) {
 
 Write-Host "Autopilot for Flyway - Database Creation Complete" 
 # Await user key press before closing the window
-Write-Host "Press any key to close this window..."
-Read-Host "Press Enter to close this window..."
+Write-Host "Press Enter to close this window..."
+Read-Host | Out-Null
