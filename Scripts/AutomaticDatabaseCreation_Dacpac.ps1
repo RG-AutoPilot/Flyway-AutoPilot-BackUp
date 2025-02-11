@@ -261,6 +261,5 @@ if (Test-Path -Path $tomlFilePath) {
 }
 
 Write-Host "Autopilot for Flyway - Database Creation Complete" 
-# Require key press to complete PowerShell terminal
-Write-Host "Press any key to close this window..."
-[System.Console]::ReadKey() | Out-Null
+Write-Host "Press Enter to close this window..."
+Read-Host | Out-Null
