@@ -1,9 +1,8 @@
-# This is a basic workflow to help you get started with Actions
+# This is a basic workflow to help you get started with GitHub Actions
  
 name: GitHub-Flyway-AutoPilot-Pipeline-Linux
 
 on:
-  # Triggers the workflow on push or pull request events but only for the "release" branch
   # pull_request:
   #   branches:
   #     - release
